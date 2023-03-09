@@ -2,23 +2,25 @@ package player
 
 import (
 	"container/list"
-	"fmt"
+	"context"
+	"errors"
 	"log"
-	"sync"
 	"time"
 )
 
 type (
 	Song struct {
 		Name     string
-		Duration int
+		Duration time.Duration
 	}
 
 	MusicPlayer struct {
+		ctx      context.Context
 		playlist *list.List
 		current  *list.Element
+		curTime  time.Duration
 		playing  bool
-		mutex    sync.Mutex
+		cancel   context.CancelFunc
 	}
 
 	Player interface {
@@ -28,78 +30,95 @@ type (
 		Prev()
 		AddSong(s Song)
 	}
+
+	playState int
 )
 
-func NewPlayer() Player {
+const (
+	statePlaying playState = iota
+	statePaused
+)
+
+func New(ctx context.Context, cancelFunc context.CancelFunc) Player {
 	return &MusicPlayer{
+		ctx:      ctx,
 		playlist: list.New(),
 		playing:  false,
+		cancel:   cancelFunc,
 	}
 }
 
 func (p *MusicPlayer) Play() error {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
 	if p.playlist.Len() == 0 {
-		return fmt.Errorf("error: playlist is empty, please try add track, and try again")
+		return errors.New("error: playlist is empty, please try add track, and try again")
 	}
 
-	if !p.playing {
-		p.playing = true
-		log.Println(p.current)
-		go func() {
-			for {
-				if p.current == nil {
-					p.current = p.playlist.Front()
+	if p.playing {
+		return errors.New("error: player is already playing")
+	}
+
+	p.playing = true
+
+	go func() {
+		if p.current == nil {
+			p.current = p.playlist.Front()
+		}
+
+		for {
+			select {
+			case <-p.ctx.Done():
+				p.Pause()
+				return
+			default:
+				song := p.current.Value.(Song)
+				time.Sleep(1 * time.Second)
+
+				if p.playing {
+					// если песня прослушана
+					if p.curTime > song.Duration {
+						p.Next()
+						p.curTime = 0
+					}
+
+					// чтобы слушатель не умирал
+					if p.current == nil {
+						p.Pause()
+						p.current = p.playlist.Front()
+						return
+					}
+					p.curTime += time.Second
 				}
 
-				select {
-				case <-time.After(time.Duration(p.current.Value.(*Song).Duration)):
-					p.Next()
-				default:
-					time.Sleep(50 * time.Millisecond)
-				}
-
+				log.Printf("Playing song: %s, duration: %v\n, status %v, %d", song.Name, song.Duration, p.playing, p.curTime/time.Second)
 			}
-		}()
-	}
+		}
+	}()
 
 	return nil
 }
 
 func (p *MusicPlayer) Pause() {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
+	log.Println("paused")
 	if p.playing {
 		p.playing = false
 	}
 }
 
 func (p *MusicPlayer) Next() {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
+	p.curTime = 0
 	if p.current != nil {
 		p.current = p.current.Next()
-		p.Play()
 	}
 }
 
 func (p *MusicPlayer) Prev() {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
+	p.curTime = 0
 	if p.current != nil {
 		p.current = p.current.Prev()
-		p.Play()
 	}
 }
 
 func (p *MusicPlayer) AddSong(s Song) {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
+	log.Printf("added song: %s, duration: %v\n", s.Name, s.Duration)
 	p.playlist.PushBack(s)
 }
