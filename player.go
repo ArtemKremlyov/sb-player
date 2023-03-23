@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,7 @@ type (
 		curTime  time.Duration
 		playing  bool
 		cancel   context.CancelFunc
+		mutex    sync.Mutex
 	}
 
 	Player interface {
@@ -49,6 +51,9 @@ func New(ctx context.Context, cancelFunc context.CancelFunc) Player {
 }
 
 func (p *MusicPlayer) Play() error {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
 	if p.playlist.Len() == 0 {
 		return errors.New("error: playlist is empty, please try add track, and try again")
 	}
@@ -60,6 +65,7 @@ func (p *MusicPlayer) Play() error {
 	p.playing = true
 
 	go func() {
+		p.mutex.Lock()
 		if p.current == nil {
 			p.current = p.playlist.Front()
 		}
@@ -84,12 +90,14 @@ func (p *MusicPlayer) Play() error {
 					if p.current == nil {
 						p.Pause()
 						p.current = p.playlist.Front()
+						p.mutex.Unlock()
 						return
 					}
 					p.curTime += time.Second
 				}
 
 				log.Printf("Playing song: %s, duration: %v\n, status %v, %d", song.Name, song.Duration, p.playing, p.curTime/time.Second)
+				p.mutex.Unlock()
 			}
 		}
 	}()
@@ -98,13 +106,17 @@ func (p *MusicPlayer) Play() error {
 }
 
 func (p *MusicPlayer) Pause() {
-	log.Println("paused")
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	if p.playing {
 		p.playing = false
 	}
 }
 
 func (p *MusicPlayer) Next() {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
 	p.curTime = 0
 	if p.current != nil {
 		p.current = p.current.Next()
@@ -112,6 +124,9 @@ func (p *MusicPlayer) Next() {
 }
 
 func (p *MusicPlayer) Prev() {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
 	p.curTime = 0
 	if p.current != nil {
 		p.current = p.current.Prev()
@@ -119,6 +134,9 @@ func (p *MusicPlayer) Prev() {
 }
 
 func (p *MusicPlayer) AddSong(s Song) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
 	log.Printf("added song: %s, duration: %v\n", s.Name, s.Duration)
 	p.playlist.PushBack(s)
 }
